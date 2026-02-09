@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"time"
 
+	inbound_messaging "video-processor-worker/internal/adapters/inbound/messaging"
 	outbound_processor "video-processor-worker/internal/adapters/outbound/processor"
 	outbound_repository "video-processor-worker/internal/adapters/outbound/repository"
 	outbound_storage "video-processor-worker/internal/adapters/outbound/storage"
@@ -67,6 +68,20 @@ func main() {
 	// Initialize Worker Service
 	worker := core_services.NewWorkerService(processor, storage, videoRepo)
 
-	// Start Polling
+	// Initialize NATS Consumer
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://nats1:4222"
+	}
+	consumer, err := inbound_messaging.NewNatsConsumerAdapter(natsURL, worker.HandleUploadEvent)
+	if err != nil {
+		log.Printf("⚠️ Erro ao conectar ao NATS: %v. O worker continuará apenas com polling.", err)
+	} else {
+		if err := consumer.Listen(); err != nil {
+			log.Printf("⚠️ Erro ao iniciar listener NATS: %v", err)
+		}
+	}
+
+	// Start Polling (Fallback or main loop)
 	worker.Start()
 }

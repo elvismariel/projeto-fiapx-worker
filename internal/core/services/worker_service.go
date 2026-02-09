@@ -25,25 +25,47 @@ func NewWorkerService(p ports.VideoProcessor, s ports.Storage, r ports.VideoRepo
 }
 
 func (s *workerService) Start() {
-	log.Println("🚀 Worker started, polling for tasks...")
+	log.Println("🚀 Worker started, polling for tasks (fallback)...")
 	for {
 		videos, err := s.repo.GetPending()
 		if err != nil {
 			log.Printf("❌ Error polling videos: %v", err)
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 			continue
 		}
 
 		if len(videos) == 0 {
-			time.Sleep(2 * time.Second)
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
 		for _, v := range videos {
-			log.Printf("🎬 Processing video ID: %d (%s)", v.ID, v.Filename)
+			log.Printf("🎬 Polling found video ID: %d (%s)", v.ID, v.Filename)
 			s.processVideo(&v)
 		}
 	}
+}
+
+func (s *workerService) HandleUploadEvent(videoID int64, filename string) error {
+	log.Printf("📥 Handling upload event for video ID: %d", videoID)
+
+	// Get video from repo to ensure we have the latest state
+	video, err := s.repo.GetByID(videoID)
+	if err != nil {
+		return fmt.Errorf("error fetching video %d: %w", videoID, err)
+	}
+
+	if video == nil {
+		return fmt.Errorf("video %d not found", videoID)
+	}
+
+	if video.Status != domain.StatusPending {
+		log.Printf("ℹ️ Video %d already in status %s, skipping", videoID, video.Status)
+		return nil
+	}
+
+	s.processVideo(video)
+	return nil
 }
 
 func (s *workerService) processVideo(video *domain.Video) {
