@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"context"
 	"io"
 	"video-processor-worker/internal/core/domain"
 )
@@ -30,11 +31,9 @@ type Storage interface {
 
 // VideoRepository is the Outbound Port for video data persistence
 type VideoRepository interface {
-	Create(video *domain.Video) error
-	Update(video *domain.Video) error
-	GetByID(id int64) (*domain.Video, error)
-	GetByUserID(userID int64) ([]domain.Video, error)
-	GetPending() ([]domain.Video, error)
+	Update(ctx context.Context, video *domain.Video) error
+	GetByID(ctx context.Context, id int64) (*domain.Video, error)
+	GetPending(ctx context.Context) ([]domain.Video, error)
 }
 
 // UserUseCase is the Inbound Port for user logic

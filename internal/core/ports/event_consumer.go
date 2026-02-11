@@ -1,5 +1,7 @@
 package ports
 
+import "context"
+
 type EventConsumer interface {
-	Listen() error
+	Listen(ctx context.Context) error
 }

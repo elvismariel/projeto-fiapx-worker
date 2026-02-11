@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,7 +13,7 @@ import (
 type NatsConsumerAdapter struct {
 	nc      *nats.Conn
 	js      nats.JetStreamContext
-	handler func(videoID int64, filename string) error
+	handler func(ctx context.Context, videoID int64) error
 }
 
 type uploadEvent struct {
@@ -20,7 +21,7 @@ type uploadEvent struct {
 	Filename string `json:"filename"`
 }
 
-func NewNatsConsumerAdapter(url string, handler func(videoID int64, filename string) error) (ports.EventConsumer, error) {
+func NewNatsConsumerAdapter(url string, handler func(ctx context.Context, videoID int64) error) (ports.EventConsumer, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to NATS: %w", err)
@@ -38,7 +39,7 @@ func NewNatsConsumerAdapter(url string, handler func(videoID int64, filename str
 	}, nil
 }
 
-func (a *NatsConsumerAdapter) Listen() error {
+func (a *NatsConsumerAdapter) Listen(ctx context.Context) error {
 	log.Println("👂 Listening for NATS JetStream events on subject 'upload'...")
 
 	// Durable push-based consumer
@@ -51,9 +52,8 @@ func (a *NatsConsumerAdapter) Listen() error {
 
 		log.Printf("📥 Received event: video_id=%d, filename=%s", event.VideoID, event.Filename)
 
-		if err := a.handler(event.VideoID, event.Filename); err != nil {
+		if err := a.handler(ctx, event.VideoID); err != nil {
 			log.Printf("❌ Error handling event: %v", err)
-			// Nak so it can be retried if needed, but for now we just log
 			m.Nak()
 			return
 		}

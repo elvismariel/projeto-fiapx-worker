@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
+	"syscall"
 	"time"
 
 	inbound_messaging "video-processor-worker/internal/adapters/inbound/messaging"
@@ -18,70 +20,96 @@ import (
 )
 
 func main() {
-	fmt.Println("🚀 Video Processor Worker v1 starting...")
+	fmt.Println("🚀 Video Processor Worker starting...")
 
-	// Verify if ffmpeg is installed
-	_, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		log.Fatal("❌ Erro: ffmpeg não encontrado no sistema. Por favor, instale o ffmpeg para continuar.")
+	// Create root context with cancellation for graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Verify dependencies
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		log.Fatal("❌ Error: ffmpeg not found in system")
 	}
 
 	// Database initialization
-	dbUser := os.Getenv("DB_USER")
-	dbPass := os.Getenv("DB_PASSWORD")
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbName := os.Getenv("DB_NAME")
-
-	if dbHost == "" {
-		dbHost = "db"
-	}
-	if dbPort == "" {
-		dbPort = "5432"
-	}
-
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", dbUser, dbPass, dbHost, dbPort, dbName)
-
-	var dbPool *pgxpool.Pool
-	for i := 0; i < 10; i++ {
-		dbPool, err = pgxpool.New(context.Background(), connStr)
-		if err == nil {
-			err = dbPool.Ping(context.Background())
-			if err == nil {
-				break
-			}
-		}
-		log.Printf("⏳ Waiting for database... (%d/10)", i+1)
-		time.Sleep(3 * time.Second)
-	}
-
+	dbPool, err := initDatabase(ctx)
 	if err != nil {
-		log.Fatal("❌ Erro ao conectar ao banco de dados: ", err)
+		log.Fatal("❌ Error initializing database: ", err)
 	}
 	defer dbPool.Close()
 
-	// Initialize Outbound Adapters
+	// Initialize Adapters
 	storage := outbound_storage.NewFSStorage()
 	processor := outbound_processor.NewFFmpegProcessor()
 	videoRepo := outbound_repository.NewPostgresVideoRepository(dbPool)
 
-	// Initialize Worker Service
+	// Initialize Core Service
 	worker := core_services.NewWorkerService(processor, storage, videoRepo)
 
-	// Initialize NATS Consumer
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = "nats://nats1:4222"
-	}
-	consumer, err := inbound_messaging.NewNatsConsumerAdapter(natsURL, worker.HandleUploadEvent)
+	// Initialize Inbound Adapters (NATS and Postgresql Poller)
+
+	// 1. NATS Consumer
+	natsURL := getEnv("NATS_URL", "nats://nats1:4222")
+	consumer, err := inbound_messaging.NewNatsConsumerAdapter(natsURL, worker.ProcessVideoByID)
 	if err != nil {
-		log.Printf("⚠️ Erro ao conectar ao NATS: %v. O worker continuará apenas com polling.", err)
+		log.Printf("⚠️ Error connecting to NATS: %v. Fallback to polling only.", err)
 	} else {
-		if err := consumer.Listen(); err != nil {
-			log.Printf("⚠️ Erro ao iniciar listener NATS: %v", err)
-		}
+		go func() {
+			if err := consumer.Listen(ctx); err != nil {
+				log.Printf("⚠️ NATS listener stopped: %v", err)
+			}
+		}()
 	}
 
-	// Start Polling (Fallback or main loop)
-	worker.Start()
+	// 2. Poller (Fallback Postgresql)
+	//poller := polling.NewPollerAdapter(videoRepo, worker.ProcessVideoByID)
+	//go poller.Start(ctx)
+
+	log.Println("✅ Worker is up and running. Press Ctrl+C to stop.")
+
+	// Wait for termination signal
+	<-ctx.Done()
+	log.Println("👋 Shutting down worker gracefully...")
+
+	// Give some time for ongoing tasks to finish if needed
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	log.Println("🛑 Worker stopped.")
+}
+
+func initDatabase(ctx context.Context) (*pgxpool.Pool, error) {
+	dbUser := os.Getenv("DB_USER")
+	dbPass := os.Getenv("DB_PASSWORD")
+	dbHost := getEnv("DB_HOST", "db")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbName := os.Getenv("DB_NAME")
+
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", dbUser, dbPass, dbHost, dbPort, dbName)
+
+	var pool *pgxpool.Pool
+	var err error
+	for i := 0; i < 10; i++ {
+		pool, err = pgxpool.New(ctx, connStr)
+		if err == nil {
+			if err = pool.Ping(ctx); err == nil {
+				return pool, nil
+			}
+		}
+		log.Printf("⏳ Waiting for database... (%d/10)", i+1)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return nil, err
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
