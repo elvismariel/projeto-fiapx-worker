@@ -16,11 +16,23 @@ import (
 	outbound_storage "video-processor-worker/internal/adapters/outbound/storage"
 	core_services "video-processor-worker/internal/core/services"
 
+	"net/http"
+
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
 	fmt.Println("🚀 Video Processor Worker starting...")
+
+	// Start Prometheus metrics server
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Println("📊 Metrics server started on :9090")
+		if err := http.ListenAndServe(":9090", nil); err != nil {
+			log.Printf("⚠️ Metrics server failed: %v", err)
+		}
+	}()
 
 	// Create root context with cancellation for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

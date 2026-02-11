@@ -6,8 +6,25 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 	"video-processor-worker/internal/core/domain"
 	"video-processor-worker/internal/core/ports"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	videoProcessingDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "worker_video_processing_duration_seconds",
+		Help:    "Duration of video processing in seconds",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"status"})
+
+	videosProcessedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "worker_videos_processed_total",
+		Help: "Total number of videos processed",
+	}, []string{"status"})
 )
 
 type workerService struct {
@@ -45,6 +62,15 @@ func (s *workerService) ProcessVideoByID(ctx context.Context, videoID int64) err
 }
 
 func (s *workerService) processVideo(ctx context.Context, video *domain.Video) error {
+	start := time.Now()
+	var status = "success"
+
+	defer func() {
+		duration := time.Since(start).Seconds()
+		videoProcessingDuration.WithLabelValues(status).Observe(duration)
+		videosProcessedTotal.WithLabelValues(status).Inc()
+	}()
+
 	// Update status to PROCESSING
 	video.Status = domain.StatusProcessing
 	video.Message = "Processamento iniciado..."
@@ -63,6 +89,7 @@ func (s *workerService) processVideo(ctx context.Context, video *domain.Video) e
 		video.Message = "Erro no processamento: " + err.Error()
 		s.repo.Update(ctx, video)
 		s.storage.DeleteFile(videoPath)
+		status = "error"
 		return err
 	}
 
@@ -75,6 +102,7 @@ func (s *workerService) processVideo(ctx context.Context, video *domain.Video) e
 		video.Message = "Erro ao criar ZIP: " + err.Error()
 		s.repo.Update(ctx, video)
 		s.storage.DeleteFile(videoPath)
+		status = "error"
 		return err
 	}
 
