@@ -11,6 +11,7 @@ import (
 	"time"
 
 	inbound_messaging "video-processor-worker/internal/adapters/inbound/messaging"
+	outbound_email "video-processor-worker/internal/adapters/outbound/email"
 	outbound_processor "video-processor-worker/internal/adapters/outbound/processor"
 	outbound_repository "video-processor-worker/internal/adapters/outbound/repository"
 	outbound_storage "video-processor-worker/internal/adapters/outbound/storage"
@@ -54,9 +55,11 @@ func main() {
 	storage := outbound_storage.NewFSStorage()
 	processor := outbound_processor.NewFFmpegProcessor()
 	videoRepo := outbound_repository.NewPostgresVideoRepository(dbPool)
+	userRepo := outbound_repository.NewPostgresUserRepository(dbPool)
+	emailer := outbound_email.NewLogEmailAdapter()
 
 	// Initialize Core Service
-	worker := core_services.NewWorkerService(processor, storage, videoRepo)
+	worker := core_services.NewWorkerService(processor, storage, videoRepo, userRepo, emailer)
 
 	// Initialize Inbound Adapters (NATS and Postgresql Poller)
 

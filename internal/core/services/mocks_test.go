@@ -77,3 +77,37 @@ func (m *MockVideoRepository) GetPending(ctx context.Context) ([]domain.Video, e
 	args := m.Called(ctx)
 	return args.Get(0).([]domain.Video), args.Error(1)
 }
+
+type MockUserRepository struct {
+	mock.Mock
+}
+
+func (m *MockUserRepository) Create(user *domain.User) error {
+	args := m.Called(user)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) GetByEmail(email string) (*domain.User, error) {
+	args := m.Called(email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) GetByID(id int64) (*domain.User, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+type MockEmailSender struct {
+	mock.Mock
+}
+
+func (m *MockEmailSender) SendEmail(to, subject, body string) error {
+	args := m.Called(to, subject, body)
+	return args.Error(0)
+}

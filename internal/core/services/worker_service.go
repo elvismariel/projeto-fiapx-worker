@@ -31,13 +31,17 @@ type workerService struct {
 	processor ports.VideoProcessor
 	storage   ports.Storage
 	repo      ports.VideoRepository
+	userRepo  ports.UserRepository
+	emailer   ports.EmailSender
 }
 
-func NewWorkerService(p ports.VideoProcessor, s ports.Storage, r ports.VideoRepository) *workerService {
+func NewWorkerService(p ports.VideoProcessor, s ports.Storage, r ports.VideoRepository, ur ports.UserRepository, e ports.EmailSender) *workerService {
 	return &workerService{
 		processor: p,
 		storage:   s,
 		repo:      r,
+		userRepo:  ur,
+		emailer:   e,
 	}
 }
 
@@ -89,6 +93,7 @@ func (s *workerService) processVideo(ctx context.Context, video *domain.Video) e
 		video.Message = "Erro no processamento: " + err.Error()
 		s.repo.Update(ctx, video)
 		s.storage.DeleteFile(videoPath)
+		s.notifyFailure(ctx, video)
 		status = "error"
 		return err
 	}
@@ -102,6 +107,7 @@ func (s *workerService) processVideo(ctx context.Context, video *domain.Video) e
 		video.Message = "Erro ao criar ZIP: " + err.Error()
 		s.repo.Update(ctx, video)
 		s.storage.DeleteFile(videoPath)
+		s.notifyFailure(ctx, video)
 		status = "error"
 		return err
 	}
@@ -125,4 +131,26 @@ func (s *workerService) processVideo(ctx context.Context, video *domain.Video) e
 
 	log.Printf("✅ Video %d processed successfully", video.ID)
 	return nil
+}
+
+func (s *workerService) notifyFailure(ctx context.Context, video *domain.Video) {
+	log.Printf("📧 Initiating failure notification for video %d (User %d)", video.ID, video.UserID)
+
+	user, err := s.userRepo.GetByID(video.UserID)
+	if err != nil {
+		log.Printf("⚠️ Error fetching user %d for notification: %v", video.UserID, err)
+		return
+	}
+
+	if user == nil || user.Email == "" {
+		log.Printf("⚠️ User %d not found or has no email for notification", video.UserID)
+		return
+	}
+
+	subject := fmt.Sprintf("Falha no Processamento do Vídeo: %s", video.Filename)
+	body := fmt.Sprintf("Olá %s,\n\nInfelizmente ocorreu um erro ao processar seu vídeo '%s'.\n\nDetalhes do erro: %s\n\nEquipe FiapX", user.Name, video.Filename, video.Message)
+
+	if err := s.emailer.SendEmail(user.Email, subject, body); err != nil {
+		log.Printf("❌ Failed to send failure email to %s: %v", user.Email, err)
+	}
 }
